@@ -179,10 +179,10 @@ static void sdl_event_handler(void *event_)
 
 #ifdef WEBOS
   /* Process touch events for WebOS on-screen controls */
-  if (!in_menu) {
+  {
     int ret = webos_touch_event(event);
-    if (ret == 2) {
-      /* Menu button pressed */
+    if (ret == 2 && !in_menu) {
+      /* Menu button pressed (only in game mode) */
       extern enum sched_action emu_action, emu_action_old;
       emu_action = SACTION_ENTER_MENU;
       emu_action_old = 0;
@@ -769,6 +769,10 @@ void plat_video_menu_enter(int is_rom_loaded)
 
   in_menu = 1;
 
+#ifdef WEBOS
+  webos_touch_set_menu_mode(1);
+#endif
+
   /* surface will be lost, must adjust pl_vout_buf for menu bg */
   if (plat_sdl_overlay != NULL)
     uyvy_to_rgb565(menubg_img, psx_w * psx_h);
@@ -835,13 +839,27 @@ void plat_video_menu_end(void)
     SDL_UnlockYUVOverlay(plat_sdl_overlay);
 
     SDL_DisplayYUVOverlay(plat_sdl_overlay, &dstrect);
+#ifdef WEBOS
+    /* Draw touch overlay on top of menu (software blit to screen) */
+    webos_touch_draw_overlay_sdl(plat_sdl_screen);
+    SDL_Flip(plat_sdl_screen);
+#endif
   }
   else if (plat_sdl_gl_active) {
     gl_flip_v(g_menuscreen_ptr, g_menuscreen_w, g_menuscreen_h,
         g_scaler != SCALE_FULLSCREEN ? gl_vertices : NULL);
+#ifdef WEBOS
+    /* Draw touch overlay on top of menu */
+    webos_touch_draw_overlay_sdl(plat_sdl_screen);
+    SDL_Flip(plat_sdl_screen);
+#endif
   }
   else {
     centered_blit_menu();
+#ifdef WEBOS
+    /* Draw touch overlay for menu navigation */
+    webos_touch_draw_overlay_sdl(plat_sdl_screen);
+#endif
     do_flip |= 2;
   }
 
@@ -861,6 +879,11 @@ void plat_video_menu_leave(void)
   int d;
 
   in_menu = 0;
+
+#ifdef WEBOS
+  webos_touch_set_menu_mode(0);
+#endif
+
   if (plat_sdl_overlay != NULL || plat_sdl_gl_active)
     memset(shadow_fb, 0, g_menuscreen_w * g_menuscreen_h * 2);
 
@@ -872,6 +895,33 @@ void plat_video_menu_leave(void)
 
   for (d = 0; d < IN_MAX_DEVS; d++)
     in_set_config_int(d, IN_CFG_ANALOG_MAP_ULDR, 0);
+}
+
+void plat_video_show_loading(void)
+{
+  const char *msg = "Loading...";
+  int x, y;
+
+  if (plat_sdl_screen == NULL)
+    return;
+
+  /* Clear screen to black */
+  if (SDL_MUSTLOCK(plat_sdl_screen))
+    SDL_LockSurface(plat_sdl_screen);
+
+  memset(plat_sdl_screen->pixels, 0,
+    plat_sdl_screen->pitch * plat_sdl_screen->h);
+
+  /* Draw "Loading..." centered on screen (8x8 font, ~10 chars) */
+  x = (plat_sdl_screen->w - 80) / 2;  /* 10 chars * 8 pixels */
+  y = (plat_sdl_screen->h - 8) / 2;
+
+  basic_text_out16_nf(plat_sdl_screen->pixels, plat_sdl_screen->w, x, y, msg);
+
+  if (SDL_MUSTLOCK(plat_sdl_screen))
+    SDL_UnlockSurface(plat_sdl_screen);
+
+  SDL_Flip(plat_sdl_screen);
 }
 
 void *plat_prepare_screenshot(int *w, int *h, int *bpp)

@@ -2201,6 +2201,9 @@ static int run_cd_image(const char *fname)
 		fname = fname2;
 	}
 
+	/* Show loading screen while game loads */
+	plat_video_show_loading();
+
 	ready_to_go = 0;
 	reload_plugins(fname);
 

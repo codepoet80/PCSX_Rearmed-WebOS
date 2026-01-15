@@ -426,6 +426,7 @@ OBJS += frontend/in_webos_touch.o
 OBJS += frontend/libpicofe/gl_webos.o
 frontend/libpicofe/plat_sdl.o: CFLAGS += -DHAVE_GLES -DWEBOS
 frontend/libpicofe/gl_webos.o: CFLAGS += -DHAVE_GLES -DWEBOS
+frontend/libpicofe/input.o: CFLAGS += -DWEBOS
 frontend/plat_sdl.o: CFLAGS += -DHAVE_GLES -DWEBOS
 frontend/plat_webos.o: CFLAGS += -DWEBOS
 frontend/in_webos_touch.o: CFLAGS += -DWEBOS

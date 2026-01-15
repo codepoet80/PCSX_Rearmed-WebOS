@@ -4,6 +4,7 @@
 void plat_init(void);
 void plat_finish(void);
 void plat_minimize(void);
+void plat_video_show_loading(void);
 void *plat_prepare_screenshot(int *w, int *h, int *bpp);
 
 // indirectly called from GPU plugin

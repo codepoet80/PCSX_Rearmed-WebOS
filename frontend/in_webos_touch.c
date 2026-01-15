@@ -13,6 +13,7 @@
 #include "libpicofe/input.h"
 #include "plugin_lib.h"
 #include "in_webos_touch.h"
+#include "main.h"  /* for hud_msg */
 
 #define TOUCH_SCREEN_W 1024
 #define TOUCH_SCREEN_H 768
@@ -24,8 +25,14 @@ typedef struct {
     const char *label;
 } touch_zone_t;
 
-/* Layout for 1024x768 landscape */
-static const touch_zone_t touch_zones[] = {
+/* Special key values for menu buttons (negative to distinguish from DKEY_*) */
+#define MENU_KEY_UP    -10
+#define MENU_KEY_DOWN  -11
+#define MENU_KEY_MOK   -12
+#define MENU_KEY_MBACK -13
+
+/* Layout for 1024x768 landscape - game controls */
+static const touch_zone_t game_touch_zones[] = {
     /* D-Pad - left side */
     { 80,  280, 80, 80,  DKEY_UP,       "UP" },
     { 80,  440, 80, 80,  DKEY_DOWN,     "DN" },
@@ -52,14 +59,33 @@ static const touch_zone_t touch_zones[] = {
     { 462, 0,   100, 50, -1,            "MENU" },  /* -1 = special: open menu */
 };
 
-#define NUM_TOUCH_ZONES (sizeof(touch_zones) / sizeof(touch_zones[0]))
+/* Simpler menu controls - positioned to not block UI text */
+static const touch_zone_t menu_touch_zones[] = {
+    /* Navigation - bottom left */
+    { 50,  570, 120, 90, MENU_KEY_UP,    "UP" },
+    { 190, 570, 120, 90, MENU_KEY_DOWN,  "DOWN" },
+
+    /* Actions - bottom right */
+    { 714, 570, 120, 90, MENU_KEY_MBACK, "BACK" },
+    { 854, 570, 120, 90, MENU_KEY_MOK,   "OK" },
+};
+
+#define NUM_GAME_ZONES (sizeof(game_touch_zones) / sizeof(game_touch_zones[0]))
+#define NUM_MENU_ZONES (sizeof(menu_touch_zones) / sizeof(menu_touch_zones[0]))
+
+/* Alias for backward compatibility */
+static const touch_zone_t *touch_zones = game_touch_zones;
+#define NUM_TOUCH_ZONES NUM_GAME_ZONES
 
 /* Track which fingers are pressing which zones */
 #define MAX_FINGERS 10
 static int finger_zones[MAX_FINGERS];
 static int current_buttons = 0;
+static int current_menu_buttons = 0;
+static int pending_menu_buttons = 0;   /* One-shot: set on press, cleared after read */
 static int overlay_visible = 1;
 static int initialized = 0;
+static int menu_mode = 0;  /* 0 = game mode, 1 = menu mode */
 
 /* Track current screen dimensions for coordinate scaling */
 static int current_screen_w = TOUCH_SCREEN_W;
@@ -96,13 +122,19 @@ void webos_touch_draw_overlay(void)
     /* Drawing is now done via webos_touch_draw_overlay_sdl */
 }
 
-static int debug_once = 0;
+/* Track previous screen dimensions to detect resolution changes */
+static int prev_screen_w = 0;
+static int prev_screen_h = 0;
+static int resolution_stable_frames = 0;
+#define RESOLUTION_STABLE_THRESHOLD 5  /* Wait for resolution to stabilize */
 
 void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
 {
     int i;
     float scale_x, scale_y;
     int screen_w, screen_h;
+    const touch_zone_t *zones;
+    int num_zones;
 
     if (!overlay_visible || !initialized || !screen)
         return;
@@ -110,15 +142,41 @@ void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
     screen_w = screen->w;
     screen_h = screen->h;
 
-    if (!debug_once) {
-        printf("WebOS Touch: Drawing overlay on %dx%d surface (target %dx%d)\n",
-               screen_w, screen_h, TOUCH_SCREEN_W, TOUCH_SCREEN_H);
-        debug_once = 1;
+    /* Resolution stability check only for game mode (prevents artifacts during transitions) */
+    if (!menu_mode) {
+        /* Detect resolution changes */
+        if (screen_w != prev_screen_w || screen_h != prev_screen_h) {
+            printf("WebOS Touch: Resolution changed from %dx%d to %dx%d\n",
+                   prev_screen_w, prev_screen_h, screen_w, screen_h);
+            prev_screen_w = screen_w;
+            prev_screen_h = screen_h;
+            resolution_stable_frames = 0;
+            /* Clear any HUD message to prevent artifacts */
+            hud_msg[0] = 0;
+            hud_new_msg = 0;
+            /* Don't draw during resolution transition to avoid artifacts */
+            return;
+        }
+
+        /* Wait for resolution to stabilize before drawing overlay */
+        if (resolution_stable_frames < RESOLUTION_STABLE_THRESHOLD) {
+            resolution_stable_frames++;
+            return;
+        }
     }
 
     /* Store screen dimensions for touch coordinate scaling */
     current_screen_w = screen_w;
     current_screen_h = screen_h;
+
+    /* Select zone array based on mode */
+    if (menu_mode) {
+        zones = menu_touch_zones;
+        num_zones = NUM_MENU_ZONES;
+    } else {
+        zones = game_touch_zones;
+        num_zones = NUM_GAME_ZONES;
+    }
 
     /* Calculate scaling factors from touch coordinates (1024x768) to screen surface */
     scale_x = (float)screen_w / TOUCH_SCREEN_W;
@@ -127,11 +185,10 @@ void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
     if (SDL_MUSTLOCK(screen))
         SDL_LockSurface(screen);
 
-    for (i = 0; i < NUM_TOUCH_ZONES; i++) {
-        const touch_zone_t *zone = &touch_zones[i];
+    for (i = 0; i < num_zones; i++) {
+        const touch_zone_t *zone = &zones[i];
         int pressed = 0;
         int j;
-        Uint16 bg_color;
         int draw_x, draw_y, draw_w, draw_h;
 
         /* Check if any finger is on this zone */
@@ -142,18 +199,18 @@ void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
             }
         }
 
-        bg_color = pressed ? COLOR_BUTTON_PRESSED : COLOR_BUTTON_NORMAL;
-
         /* Scale touch zone coordinates to screen surface */
         draw_x = (int)(zone->x * scale_x);
         draw_y = (int)(zone->y * scale_y);
         draw_w = (int)(zone->w * scale_x);
         draw_h = (int)(zone->h * scale_y);
 
-        /* Draw button background */
-        draw_rect_sdl(screen, draw_x, draw_y, draw_w, draw_h, bg_color);
+        /* Only draw filled background when pressed, otherwise just outline */
+        if (pressed) {
+            draw_rect_sdl(screen, draw_x, draw_y, draw_w, draw_h, COLOR_BUTTON_PRESSED);
+        }
 
-        /* Draw border (scaled thickness) */
+        /* Draw border */
         draw_rect_outline_sdl(screen, draw_x, draw_y, draw_w, draw_h, COLOR_BUTTON_BORDER, 2);
     }
 
@@ -165,13 +222,24 @@ static int find_zone(int x, int y)
 {
     int i;
     int scaled_x, scaled_y;
+    const touch_zone_t *zones;
+    int num_zones;
+
+    /* Select zone array based on mode */
+    if (menu_mode) {
+        zones = menu_touch_zones;
+        num_zones = NUM_MENU_ZONES;
+    } else {
+        zones = game_touch_zones;
+        num_zones = NUM_GAME_ZONES;
+    }
 
     /* Scale touch coordinates from screen surface to touch zone coordinate space (1024x768) */
     scaled_x = (x * TOUCH_SCREEN_W) / current_screen_w;
     scaled_y = (y * TOUCH_SCREEN_H) / current_screen_h;
 
-    for (i = 0; i < NUM_TOUCH_ZONES; i++) {
-        const touch_zone_t *zone = &touch_zones[i];
+    for (i = 0; i < num_zones; i++) {
+        const touch_zone_t *zone = &zones[i];
         if (scaled_x >= zone->x && scaled_x < zone->x + zone->w &&
             scaled_y >= zone->y && scaled_y < zone->y + zone->h) {
             return i;
@@ -183,15 +251,41 @@ static int find_zone(int x, int y)
 static void update_buttons(void)
 {
     int i;
+    const touch_zone_t *zones;
+    int num_zones;
+
     current_buttons = 0;
+    current_menu_buttons = 0;
+
+    /* Select zone array based on mode */
+    if (menu_mode) {
+        zones = menu_touch_zones;
+        num_zones = NUM_MENU_ZONES;
+    } else {
+        zones = game_touch_zones;
+        num_zones = NUM_GAME_ZONES;
+    }
 
     for (i = 0; i < MAX_FINGERS; i++) {
-        if (finger_zones[i] >= 0) {
-            int key = touch_zones[finger_zones[i]].key;
-            if (key >= 0) {
+        if (finger_zones[i] >= 0 && finger_zones[i] < num_zones) {
+            int key = zones[finger_zones[i]].key;
+            if (menu_mode) {
+                /* Map menu keys to PBTN_* values */
+                switch (key) {
+                case MENU_KEY_UP:    current_menu_buttons |= PBTN_UP;    break;
+                case MENU_KEY_DOWN:  current_menu_buttons |= PBTN_DOWN;  break;
+                case MENU_KEY_MOK:   current_menu_buttons |= PBTN_MOK;   break;
+                case MENU_KEY_MBACK: current_menu_buttons |= PBTN_MBACK; break;
+                }
+            } else if (key >= 0) {
                 current_buttons |= (1 << key);
             }
         }
+    }
+
+    /* Set pending buttons on press (one-shot mechanism) */
+    if (menu_mode && current_menu_buttons) {
+        pending_menu_buttons |= current_menu_buttons;
     }
 }
 
@@ -201,9 +295,13 @@ int webos_touch_event(const SDL_Event *event)
     int finger_id;
     int x, y;
     int zone;
+    const touch_zone_t *zones;
 
     if (!initialized)
         return 0;
+
+    /* Select correct zone array based on mode */
+    zones = menu_mode ? menu_touch_zones : game_touch_zones;
 
     switch (event->type) {
     case SDL_MOUSEBUTTONDOWN:
@@ -213,8 +311,8 @@ int webos_touch_event(const SDL_Event *event)
         zone = find_zone(x, y);
 
         if (zone >= 0) {
-            /* Check for menu button */
-            if (touch_zones[zone].key == -1) {
+            /* Check for menu button (only in game mode) */
+            if (!menu_mode && zones[zone].key == -1) {
                 /* Return special value to indicate menu request */
                 return 2;
             }
@@ -278,6 +376,36 @@ int webos_touch_init(void)
 void webos_touch_finish(void)
 {
     initialized = 0;
+}
+
+void webos_touch_set_menu_mode(int in_menu)
+{
+    int i;
+
+    if (menu_mode != in_menu) {
+        menu_mode = in_menu;
+        /* Clear finger zones when switching modes */
+        for (i = 0; i < MAX_FINGERS; i++) {
+            finger_zones[i] = -1;
+        }
+        current_buttons = 0;
+        current_menu_buttons = 0;
+        pending_menu_buttons = 0;
+        /* Mark resolution as stable so overlay draws immediately in new mode */
+        resolution_stable_frames = RESOLUTION_STABLE_THRESHOLD;
+        printf("WebOS Touch: Switched to %s mode\n", menu_mode ? "menu" : "game");
+    }
+}
+
+int webos_touch_get_menu_buttons(void)
+{
+    int buttons = pending_menu_buttons;
+
+    /* Only clear pending if we're returning something - avoids losing taps */
+    if (buttons)
+        pending_menu_buttons = 0;
+
+    return buttons;
 }
 
 #endif /* WEBOS */

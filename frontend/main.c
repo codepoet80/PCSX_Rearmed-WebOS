@@ -657,17 +657,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-#ifdef WEBOS
-	// WebOS: Hardcoded game path for testing (no menu controls yet)
-	// TODO: Remove this once proper input is working
-	if (!cdfile) {
-		static char webos_game_path[MAXPATHLEN];
-		strncpy(webos_game_path, "/media/internal/.pcsx/games/CrashBandicoot.bin", MAXPATHLEN);
-		cdfile = webos_game_path;
-		SysPrintf("WebOS: Auto-loading game from %s\n", cdfile);
-	}
-#endif
-
 	if (cdfile)
 		set_cd_image(cdfile);
 

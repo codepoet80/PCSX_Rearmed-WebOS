@@ -24,6 +24,12 @@ int webos_touch_event(const SDL_Event *event);
 /* Get current button state (bitmask of DKEY_* values) */
 int webos_touch_get_buttons(void);
 
+/* Get current button state for menu navigation (bitmask of PBTN_* values) */
+int webos_touch_get_menu_buttons(void);
+
+/* Set menu mode (uses simpler controls at bottom of screen) */
+void webos_touch_set_menu_mode(int in_menu);
+
 /* Draw the on-screen controls overlay (GL version - legacy) */
 void webos_touch_draw_overlay(void);
 
