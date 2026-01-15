@@ -132,7 +132,7 @@ webos/
 
 - PCSX-ReARMed by notaz and contributors
 - Original PCSX by PCSX Team
-- WebOS port by codepoet80
+- WebOS port by Starkka15, codepoet80 and Claude
 
 ## License
 
