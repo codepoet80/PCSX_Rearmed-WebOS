@@ -1,53 +1,139 @@
-PCSX-ReARMed - yet another PCSX fork
-====================================
+PCSX-ReARMed for WebOS
+======================
 
-![CI (Linux)](https://github.com/notaz/pcsx_rearmed/workflows/CI%20(Linux)/badge.svg)
+A PlayStation 1 emulator for HP TouchPad and other WebOS devices.
 
-PCSX ReARMed is yet another PCSX fork based on the PCSX-Reloaded project,
-which itself contains code from PCSX, PCSX-df and PCSX-Revolution. This
-version was originally ARM architecture oriented (hence the name) with
-its MIPS->ARM dynamic recompilation and assembly optimizations, but more
-recently it targets other architectures too. A fork of this emulator was
-used in [PS Classic](https://en.wikipedia.org/wiki/PlayStation_Classic)
-(without any coordination or even notification).
+Based on [PCSX-ReARMed](https://github.com/notaz/pcsx_rearmed) by notaz.
 
-## Features
-* ARM/ARM64 dynamic recompiler by Ari64
-* [lightrec](https://github.com/pcercuei/lightrec/) dynamic recompiler for other architectures
-* NEON GPU by Exophase for ARM NEON and x86 SSE2+
-* PCSX4ALL GPU by Una-i/senquack for other architectures
-* heavily modified P.E.Op.S. SPU
-* BIOS HLE emulation (most games run without proprietary BIOS)
-* libretro support
+## Installation
 
-## WebOS Packaging
+1. Download the latest `.ipk` from Releases
+2. Install via WebOS Quick Install or command line:
+   ```bash
+   palm-install com.starkka.pcsxrearmed_*.ipk
+   ```
 
-This fork includes a script to package PCSX-ReARMed for legacy webOS devices.
+## File Paths
+
+All emulator files are stored in `/media/internal/.pcsx/`:
+
+| Content | Path |
+|---------|------|
+| **BIOS files** | `/media/internal/.pcsx/bios/` |
+| **Game ISOs/BINs** | Anywhere, browse from menu (e.g., `/media/internal/games/`) |
+| **Memory cards** | `/media/internal/.pcsx/memcards/` |
+| **Save states** | `/media/internal/.pcsx/sstates/` |
+| **Screenshots** | `/media/internal/.pcsx/screenshots/` |
+| **Config** | `/media/internal/.pcsx/pcsx.cfg` |
+
+### BIOS Setup
+
+For best compatibility, copy a PlayStation BIOS file to `/media/internal/.pcsx/bios/`. Common BIOS files:
+- `SCPH1001.BIN` (North America)
+- `SCPH5501.BIN` (North America)
+- `SCPH5500.BIN` (Japan)
+- `SCPH5502.BIN` (Europe)
+
+The emulator will run without a BIOS using HLE (High Level Emulation), but some games require a real BIOS.
+
+## Controls
+
+### Touchscreen (Game Mode)
+
+On-screen controls are displayed as button outlines:
+- **Left side**: D-pad (directional controls)
+- **Right side**: Action buttons (Triangle, Circle, Cross, Square)
+- **Top corners**: L1/L2 and R1/R2 shoulder buttons
+- **Bottom center**: Select and Start
+- **Top center**: Menu button
+
+Multitouch is supported - press multiple buttons simultaneously.
+
+### Touchscreen (Menu Mode)
+
+Simplified controls at the bottom of the screen:
+- **Bottom left**: UP / DOWN navigation
+- **Bottom right**: BACK / OK actions
+
+### Bluetooth Keyboard
+
+Bluetooth keyboards work as standard input devices:
+
+| Key | Action |
+|-----|--------|
+| Arrow Keys | D-pad |
+| Z | Cross (X) |
+| X | Circle |
+| S | Square |
+| D | Triangle |
+| V | Start |
+| C | Select |
+| W | L1 |
+| R | R1 |
+| E | L2 |
+| T | R2 |
+| Escape | Open Menu |
+
+## Video Settings
+
+For best performance, select **OpenGL** video output in Options > Video. This uses hardware-accelerated display scaling.
+
+---
+
+## Building from Source
+
+See [CLAUDE.md](CLAUDE.md) for detailed build instructions.
+
+### Quick Start
 
 ```bash
-# Build and package (requires ARM cross-compiler)
-export CROSS_COMPILE=arm-linux-gnueabi-
+git submodule init && git submodule update
+./configure
+make -j$(nproc)
 ./webos-package.sh
 ```
 
-If you want to skip building, and just package:
+### Package Only (Skip Build)
+
+If you have pre-built ARM binaries:
 
 ```bash
-# Package pre-built binaries (skip compilation)
 ./webos-package.sh --skip-build
 ```
 
-For `--skip-build`, place your ARM binaries in `webos/` first:
+Place binaries in `webos/` first:
 ```
 webos/
 ├── pcsx              # main binary
 ├── plugins/
-│   ├── gpu_unai.so
-│   ├── gpu_peops.so
-│   └── spunull.so
+│   └── *.so          # GPU/SPU plugins
 └── skin/
-    └── background.png
+    └── *.png         # UI assets
 ```
 
-Requires [PalmSDK](https://github.com/pcolby/webOS-Open-SDK) installed at `/opt/PalmSDK`.
+### Requirements
 
+- [PalmSDK](https://github.com/pcolby/webOS-Open-SDK) at `/opt/PalmSDK`
+- [PalmPDK](https://github.com/pcolby/webOS-Open-SDK) at `/opt/PalmPDK`
+- ARM cross-compiler (e.g., `arm-linux-gnueabi-gcc`)
+
+---
+
+## Features
+
+* ARM dynamic recompiler (Ari64)
+* NEON GPU renderer (Exophase)
+* P.E.Op.S. SPU (audio)
+* BIOS HLE emulation
+* Multitouch on-screen controls
+* Bluetooth keyboard support
+
+## Credits
+
+- PCSX-ReARMed by notaz and contributors
+- Original PCSX by PCSX Team
+- WebOS port by codepoet80
+
+## License
+
+GNU General Public License v2.0
