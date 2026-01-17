@@ -268,3 +268,40 @@ basic_text_out16_nf(pixels, w, x, y, "Loading...");  // From libpicofe/fonts.h
 SDL_Flip(plat_sdl_screen);
 ```
 Call from `menu.c` in `run_cd_image()` before heavy loading operations.
+
+### Menu Button Input Handling
+
+The menu system in libpicofe uses `in_menu_wait()` which polls for input with timeouts and auto-repeat logic. Touch input requires special handling to work correctly with this model.
+
+**Problem**: Touch events are instantaneous, but the menu expects sustained key states. Various approaches were tested:
+
+| Approach | Description | Result |
+|----------|-------------|--------|
+| One-shot | Set pending buttons on press, clear after read | Unreliable - timing issues |
+| MinHold | Hold buttons active for 150ms after release | Works but feels sluggish |
+| Debounce | 250ms cooldown between presses | Prevents rapid navigation |
+| Queue | Buffer events, return one at a time | Good - second best option |
+| **KeyInject** | Inject SDL keyboard events (SDLK_UP, etc.) | **Best - recommended** |
+
+**Recommended Solution (KeyInject)**:
+Instead of tracking touch state and returning it via `webos_touch_get_menu_buttons()`, inject synthetic SDL keyboard events when touch buttons are pressed/released:
+
+```c
+static void inject_key_event(SDLKey key, int pressed)
+{
+    SDL_Event event;
+    memset(&event, 0, sizeof(event));
+    event.type = pressed ? SDL_KEYDOWN : SDL_KEYUP;
+    event.key.state = pressed ? SDL_PRESSED : SDL_RELEASED;
+    event.key.keysym.sym = key;
+    SDL_PushEvent(&event);
+}
+
+// On touch down: inject_key_event(SDLK_UP, 1);
+// On touch up:   inject_key_event(SDLK_UP, 0);
+```
+
+This integrates with the existing SDL keyboard input path in libpicofe, which already handles timing, repeat, and state tracking correctly.
+
+**Fallback (Queue)**:
+If keyboard injection doesn't work on a platform, the Queue approach is the second-best option. It buffers button press events and returns them one at a time, preventing lost inputs.

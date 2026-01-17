@@ -15,20 +15,20 @@ Based on [PCSX-ReARMed](https://github.com/notaz/pcsx_rearmed) by notaz.
 
 ## File Paths
 
-All emulator files are stored in `/media/internal/.pcsx/`:
+All emulator files are stored in `/media/internal/pcsx/`:
 
 | Content | Path |
 |---------|------|
-| **BIOS files** | `/media/internal/.pcsx/bios/` |
+| **BIOS files** | `/media/internal/pcsx/bios/` |
 | **Game ISOs/BINs** | Anywhere, browse from menu (e.g., `/media/internal/games/`) |
-| **Memory cards** | `/media/internal/.pcsx/memcards/` |
-| **Save states** | `/media/internal/.pcsx/sstates/` |
-| **Screenshots** | `/media/internal/.pcsx/screenshots/` |
-| **Config** | `/media/internal/.pcsx/pcsx.cfg` |
+| **Memory cards** | `/media/internal/pcsx/memcards/` |
+| **Save states** | `/media/internal/pcsx/sstates/` |
+| **Screenshots** | `/media/internal/pcsx/screenshots/` |
+| **Config** | `/media/internal/pcsx/pcsx.cfg` |
 
 ### BIOS Setup
 
-For best compatibility, copy a PlayStation BIOS file to `/media/internal/.pcsx/bios/`. Common BIOS files:
+For best compatibility, copy a PlayStation BIOS file to `/media/internal/pcsx/bios/`. Common BIOS files:
 - `SCPH1001.BIN` (North America)
 - `SCPH5501.BIN` (North America)
 - `SCPH5500.BIN` (Japan)
