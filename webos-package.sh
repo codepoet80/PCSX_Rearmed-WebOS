@@ -75,7 +75,8 @@ if [ "$CLEAN_ONLY" -eq 1 ]; then
     make clean 2>/dev/null || true
     rm -f "${WEBOS_DIR}/pcsx"
     rm -rf "${WEBOS_DIR}/plugins"
-    rm -rf "${WEBOS_DIR}/skin"
+    # Don't remove skin - it contains the custom PlayStation background
+    # rm -rf "${WEBOS_DIR}/skin"
     rm -f "${OUTPUT_DIR}"/*.ipk
     log_info "Clean complete."
     exit 0
