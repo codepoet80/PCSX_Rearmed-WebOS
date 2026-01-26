@@ -269,6 +269,34 @@ Special key values (-20 to -23) are mapped to combined button presses in `update
 - Use `SDL_FillRect()` for filled areas, custom `draw_rect_outline_sdl()` for borders
 - Draw overlay after game frame in `plat_video_menu_end()` for all render paths (YUV, GL, software)
 
+### Resolution Changes and Ghost Touch Controls
+**Problem**: When PS1 games change resolution (e.g., 640x480 → 320x240), touch control overlays from the previous frame appear duplicated or "ghosted" on screen.
+
+**Root Cause**: The WebOS compositor doesn't clear areas outside a shrinking SDL window. When the SDL surface shrinks, old touch control pixels remain visible in the compositor's buffer beyond the new window boundaries.
+
+**Solution** (in `frontend/plat_sdl.c` `change_mode()`): Before changing to a smaller resolution, briefly create a full-screen surface, clear it, double-flip for double buffering, then switch to the desired resolution:
+```c
+#ifdef WEBOS
+    /* On WebOS, the compositor doesn't clear areas outside a shrinking window.
+     * Briefly create a full-screen surface and clear it to remove ghost pixels. */
+    if (plat_target.vout_method == 0 && fs_w && fs_h) {
+      SDL_Surface *tmp = SDL_SetVideoMode(fs_w, fs_h, 16, flags | SDL_FULLSCREEN);
+      if (tmp) {
+        if (SDL_MUSTLOCK(tmp))
+          SDL_LockSurface(tmp);
+        memset(tmp->pixels, 0, tmp->pitch * tmp->h);
+        if (SDL_MUSTLOCK(tmp))
+          SDL_UnlockSurface(tmp);
+        SDL_Flip(tmp);
+        SDL_Flip(tmp); /* Double flip for double buffering */
+      }
+    }
+#endif
+    plat_sdl_screen = SDL_SetVideoMode(set_w, set_h, 16, flags);
+```
+
+This forces the compositor to update its entire buffer, eliminating ghost pixels. Only applies to software rendering mode (vout_method == 0).
+
 ### PNG Icon Loading
 Menu and game buttons use PNG icons with alpha transparency:
 ```

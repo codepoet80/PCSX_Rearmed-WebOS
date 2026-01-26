@@ -633,6 +633,22 @@ static void change_mode(int w, int h)
       had_gl = 1;
     }
     SDL_PumpEvents();
+#ifdef WEBOS
+    /* On WebOS, the compositor doesn't clear areas outside a shrinking window.
+     * Briefly create a full-screen surface and clear it to remove ghost pixels. */
+    if (plat_target.vout_method == 0 && fs_w && fs_h) {
+      SDL_Surface *tmp = SDL_SetVideoMode(fs_w, fs_h, 16, flags | SDL_FULLSCREEN);
+      if (tmp) {
+        if (SDL_MUSTLOCK(tmp))
+          SDL_LockSurface(tmp);
+        memset(tmp->pixels, 0, tmp->pitch * tmp->h);
+        if (SDL_MUSTLOCK(tmp))
+          SDL_UnlockSurface(tmp);
+        SDL_Flip(tmp);
+        SDL_Flip(tmp); /* Double flip for double buffering */
+      }
+    }
+#endif
     plat_sdl_screen = SDL_SetVideoMode(set_w, set_h, 16, flags);
     //printf("mode: %dx%d %x -> %dx%d\n", set_w, set_h, flags,
     //  plat_sdl_screen->w, plat_sdl_screen->h);
@@ -711,17 +727,35 @@ void *plat_gvideo_flip(void)
 {
   void *ret = NULL;
   int do_flip = 0;
+
   if (plat_sdl_overlay != NULL) {
     SDL_Rect dstrect = {
       (plat_sdl_screen->w - g_layer_w) / 2,
       (plat_sdl_screen->h - g_layer_h) / 2,
       g_layer_w, g_layer_h
     };
-    SDL_DisplayYUVOverlay(plat_sdl_overlay, &dstrect);
 #ifdef WEBOS
-    /* Draw touch controls on top of the screen after overlay is displayed */
+    /* Always clear the underlying screen surface before drawing touch controls.
+     * The YUV overlay (game content) is composited on top, so we only see
+     * plat_sdl_screen in areas not covered by the overlay. Clearing every frame
+     * prevents ghost button artifacts when the overlay size/position changes. */
+    if (SDL_MUSTLOCK(plat_sdl_screen))
+      SDL_LockSurface(plat_sdl_screen);
+    memset(plat_sdl_screen->pixels, 0, plat_sdl_screen->pitch * plat_sdl_screen->h);
+    if (SDL_MUSTLOCK(plat_sdl_screen))
+      SDL_UnlockSurface(plat_sdl_screen);
+    /* Draw touch controls to the screen surface (visible around overlay edges) */
     webos_touch_draw_overlay_sdl(plat_sdl_screen);
+    /* Position and display the YUV overlay with game content */
+    SDL_DisplayYUVOverlay(plat_sdl_overlay, &dstrect);
     SDL_Flip(plat_sdl_screen);
+    /* Consume forced_clears/flips since we handle clearing ourselves */
+    if (forced_clears > 0)
+      forced_clears--;
+    if (forced_flips > 0)
+      forced_flips--;
+#else
+    SDL_DisplayYUVOverlay(plat_sdl_overlay, &dstrect);
 #endif
   }
   else if (plat_sdl_gl_active) {
@@ -730,6 +764,9 @@ void *plat_gvideo_flip(void)
     /* Draw touch controls overlay after the game frame */
     webos_touch_draw_overlay();
     SDL_GL_SwapBuffers();
+    /* Consume forced_flips to prevent double flip/draw below */
+    if (forced_flips > 0)
+      forced_flips--;
 #endif
     ret = shadow_fb;
   }
@@ -846,6 +883,9 @@ void plat_video_menu_end(void)
     /* Draw touch overlay on top of menu (software blit to screen) */
     webos_touch_draw_overlay_sdl(plat_sdl_screen);
     SDL_Flip(plat_sdl_screen);
+    /* Consume forced_flips to prevent double flip below */
+    if (forced_flips > 0)
+      forced_flips--;
 #endif
   }
   else if (plat_sdl_gl_active) {
@@ -855,6 +895,9 @@ void plat_video_menu_end(void)
     /* Draw touch overlay on top of menu */
     webos_touch_draw_overlay_sdl(plat_sdl_screen);
     SDL_Flip(plat_sdl_screen);
+    /* Consume forced_flips to prevent double flip below */
+    if (forced_flips > 0)
+      forced_flips--;
 #endif
   }
   else {
@@ -881,19 +924,11 @@ void plat_video_menu_leave(void)
 {
   int d;
 
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() ENTER\n");
-  fflush(stderr);
-
   in_menu = 0;
 
 #ifdef WEBOS
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() calling webos_touch_set_menu_mode(0)\n");
-  fflush(stderr);
   webos_touch_set_menu_mode(0);
 #endif
-
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() overlay=%p gl_active=%d\n", plat_sdl_overlay, plat_sdl_gl_active);
-  fflush(stderr);
 
   if (plat_sdl_overlay != NULL || plat_sdl_gl_active)
     memset(shadow_fb, 0, g_menuscreen_w * g_menuscreen_h * 2);
@@ -901,23 +936,12 @@ void plat_video_menu_leave(void)
   if (plat_target.vout_fullscreen)
     change_mode(fs_w, fs_h);
 
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() calling overlay_or_gl_check_enable\n");
-  fflush(stderr);
   overlay_or_gl_check_enable();
-
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() calling centered_clear\n");
-  fflush(stderr);
   centered_clear();
-
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() calling setup_blit_callbacks\n");
-  fflush(stderr);
   setup_blit_callbacks(psx_w, psx_h);
 
   for (d = 0; d < IN_MAX_DEVS; d++)
     in_set_config_int(d, IN_CFG_ANALOG_MAP_ULDR, 0);
-
-  fprintf(stderr, "PCSX_DEBUG: plat_video_menu_leave() DONE\n");
-  fflush(stderr);
 }
 
 #ifdef WEBOS

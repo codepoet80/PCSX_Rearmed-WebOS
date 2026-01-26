@@ -454,12 +454,8 @@ static void blit_icon(SDL_Surface *surface, icon_t *icon, int dest_x, int dest_y
     }
 }
 
+/* GL version - currently a no-op, touch controls drawn via SDL surface */
 void webos_touch_draw_overlay(void) {}
-
-static int prev_screen_w = 0;
-static int prev_screen_h = 0;
-static int resolution_stable_frames = 0;
-#define RESOLUTION_STABLE_THRESHOLD 5
 
 void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
 {
@@ -474,24 +470,6 @@ void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
 
     screen_w = screen->w;
     screen_h = screen->h;
-
-    if (!menu_mode) {
-        if (screen_w != prev_screen_w || screen_h != prev_screen_h) {
-            printf("WebOS Touch: Resolution changed from %dx%d to %dx%d\n",
-                   prev_screen_w, prev_screen_h, screen_w, screen_h);
-            prev_screen_w = screen_w;
-            prev_screen_h = screen_h;
-            resolution_stable_frames = 0;
-            hud_msg[0] = 0;
-            hud_new_msg = 0;
-            return;
-        }
-
-        if (resolution_stable_frames < RESOLUTION_STABLE_THRESHOLD) {
-            resolution_stable_frames++;
-            return;
-        }
-    }
 
     current_screen_w = screen_w;
     current_screen_h = screen_h;
@@ -831,7 +809,6 @@ void webos_touch_set_menu_mode(int in_menu)
             finger_zones[i] = -1;
         }
         current_buttons = 0;
-        resolution_stable_frames = RESOLUTION_STABLE_THRESHOLD;
 
         /* Flush any stale touch events when switching modes */
         while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
