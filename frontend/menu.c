@@ -576,7 +576,7 @@ static int menu_write_config(int is_game)
 
 static int menu_do_last_cd_img(int is_get)
 {
-	static const char *defaults[] = { "/media", "/mnt/sd", "/mnt" };
+	static const char *defaults[] = { "/media/internal/.pcsx", "/media/internal", "/media" };
 	char path[256];
 	struct STAT st;
 	FILE *f;

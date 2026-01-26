@@ -2,10 +2,10 @@
  * WebOS touchscreen input driver with on-screen controls overlay
  * For HP TouchPad (1024x768)
  *
- * APPROACH 5: KeyInject
- * Instead of tracking touch state, inject synthetic SDL keyboard events
- * (SDLK_UP, SDLK_DOWN, SDLK_RETURN, SDLK_ESCAPE) when touch buttons are pressed.
- * This integrates with the existing SDL keyboard input path.
+ * APPROACH 6: TapKey
+ * Menu mode: Each tap immediately injects a complete keystroke (KEY_DOWN + KEY_UP).
+ * No state tracking needed - one tap = one menu action.
+ * Game mode: Standard press/release tracking for continuous input.
  */
 #ifdef WEBOS
 
@@ -29,11 +29,13 @@ typedef struct {
 } icon_t;
 
 /* Menu icons */
-static icon_t menu_icons[4];  /* UP, DOWN, OK, BACK */
+static icon_t menu_icons[6];  /* UP, DOWN, LEFT, RIGHT, OK, BACK */
 #define ICON_UP    0
 #define ICON_DOWN  1
-#define ICON_OK    2
-#define ICON_BACK  3
+#define ICON_LEFT  2
+#define ICON_RIGHT 3
+#define ICON_OK    4
+#define ICON_BACK  5
 
 /* Game control icons (action buttons) */
 static icon_t game_icons[4];  /* TRIANGLE, CIRCLE, CROSS, SQUARE */
@@ -55,8 +57,10 @@ typedef struct {
 /* Special key values for menu buttons (negative to distinguish from DKEY_*) */
 #define MENU_KEY_UP    -10
 #define MENU_KEY_DOWN  -11
-#define MENU_KEY_MOK   -12
-#define MENU_KEY_MBACK -13
+#define MENU_KEY_LEFT  -12
+#define MENU_KEY_RIGHT -13
+#define MENU_KEY_MOK   -14
+#define MENU_KEY_MBACK -15
 
 /* Special key values for D-pad diagonals */
 #define DKEY_UP_RIGHT    -20
@@ -98,41 +102,30 @@ static const touch_zone_t game_touch_zones[] = {
     { 462, 0,   100, 50, -1,            "MENU" },
 };
 
-/* Simpler menu controls - positioned to not block UI text */
+/* Menu controls - D-pad style on left, actions on right */
 static const touch_zone_t menu_touch_zones[] = {
-    /* Navigation - bottom left */
-    { 50,  570, 120, 90, MENU_KEY_UP,    "UP" },
-    { 190, 570, 120, 90, MENU_KEY_DOWN,  "DOWN" },
+    /* D-pad navigation - bottom left */
+    { 100, 510, 100, 80, MENU_KEY_UP,    "UP" },     /* Top center */
+    { 100, 678, 100, 80, MENU_KEY_DOWN,  "DOWN" },   /* Bottom center */
+    { 10,  594, 100, 80, MENU_KEY_LEFT,  "LEFT" },   /* Left */
+    { 190, 594, 100, 80, MENU_KEY_RIGHT, "RIGHT" },  /* Right */
 
     /* Actions - bottom right */
-    { 714, 570, 120, 90, MENU_KEY_MBACK, "BACK" },
-    { 854, 570, 120, 90, MENU_KEY_MOK,   "OK" },
+    { 734, 594, 120, 80, MENU_KEY_MBACK, "BACK" },
+    { 874, 594, 120, 80, MENU_KEY_MOK,   "OK" },
 };
 
 #define NUM_GAME_ZONES (sizeof(game_touch_zones) / sizeof(game_touch_zones[0]))
 #define NUM_MENU_ZONES (sizeof(menu_touch_zones) / sizeof(menu_touch_zones[0]))
-
-static const touch_zone_t *touch_zones = game_touch_zones;
-#define NUM_TOUCH_ZONES NUM_GAME_ZONES
 
 /* Track which fingers are pressing which zones */
 #define MAX_FINGERS 10
 static int finger_zones[MAX_FINGERS];
 static int current_buttons = 0;
 
-/* For visual feedback only */
-static int visual_menu_buttons = 0;
-
-/* Track which zones were pressed to detect new presses */
-static int prev_zone_pressed[NUM_MENU_ZONES] = {0};
-
 static int overlay_visible = 1;
 static int initialized = 0;
 static int menu_mode = 0;
-
-/* Timeout for auto-clearing stuck highlights (in ms) */
-#define TOUCH_TIMEOUT_MS 300
-static Uint32 last_touch_time = 0;
 
 /* Track current screen dimensions for coordinate scaling */
 static int current_screen_w = TOUCH_SCREEN_W;
@@ -180,6 +173,8 @@ static SDLKey menu_key_to_sdlkey(int menu_key)
     switch (menu_key) {
     case MENU_KEY_UP:    return SDLK_UP;
     case MENU_KEY_DOWN:  return SDLK_DOWN;
+    case MENU_KEY_LEFT:  return SDLK_LEFT;
+    case MENU_KEY_RIGHT: return SDLK_RIGHT;
     case MENU_KEY_MOK:   return SDLK_RETURN;
     case MENU_KEY_MBACK: return SDLK_ESCAPE;
     }
@@ -330,11 +325,13 @@ static void load_icons(void)
         "./",
         NULL
     };
-    const char *menu_icon_files[4] = {
+    const char *menu_icon_files[6] = {
         "menu-up.png",
         "menu-down.png",
-        "menu-forward.png",
-        "menu-backward.png"
+        "menu-backward.png",  /* LEFT - reuse backward arrow */
+        "menu-forward.png",   /* RIGHT - reuse forward arrow */
+        "control-circle.png", /* OK */
+        "control-cross.png"   /* BACK */
     };
     const char *game_icon_files[4] = {
         "control-triangle.png",
@@ -345,7 +342,7 @@ static void load_icons(void)
     int i, p;
 
     /* Initialize menu icons */
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 6; i++) {
         menu_icons[i].loaded = 0;
         menu_icons[i].pixels = NULL;
     }
@@ -361,7 +358,7 @@ static void load_icons(void)
         char path[256];
 
         /* Load menu icons */
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 6; i++) {
             if (menu_icons[i].loaded)
                 continue;
             snprintf(path, sizeof(path), "%s%s", paths[p], menu_icon_files[i]);
@@ -382,13 +379,14 @@ static void load_icons(void)
 static void free_icons(void)
 {
     int i;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 6; i++) {
         if (menu_icons[i].pixels) {
             free(menu_icons[i].pixels);
             menu_icons[i].pixels = NULL;
         }
         menu_icons[i].loaded = 0;
-
+    }
+    for (i = 0; i < 4; i++) {
         if (game_icons[i].pixels) {
             free(game_icons[i].pixels);
             game_icons[i].pixels = NULL;
@@ -470,31 +468,9 @@ void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
     int screen_w, screen_h;
     const touch_zone_t *zones;
     int num_zones;
-    int any_pressed = 0;
 
     if (!overlay_visible || !initialized || !screen)
         return;
-
-    /* Menu mode only: timeout check to auto-clear stuck highlights */
-    if (menu_mode) {
-        for (i = 0; i < MAX_FINGERS; i++) {
-            if (finger_zones[i] >= 0) {
-                any_pressed = 1;
-                break;
-            }
-        }
-
-        if (any_pressed && last_touch_time > 0) {
-            Uint32 now = SDL_GetTicks();
-            if (now - last_touch_time > TOUCH_TIMEOUT_MS) {
-                /* Clear all finger zones - touch got stuck */
-                for (i = 0; i < MAX_FINGERS; i++) {
-                    finger_zones[i] = -1;
-                }
-                update_buttons();
-            }
-        }
-    }
 
     screen_w = screen->w;
     screen_h = screen->h;
@@ -590,6 +566,12 @@ void webos_touch_draw_overlay_sdl(SDL_Surface *screen)
             case MENU_KEY_DOWN:
                 icon = &menu_icons[ICON_DOWN];
                 break;
+            case MENU_KEY_LEFT:
+                icon = &menu_icons[ICON_LEFT];
+                break;
+            case MENU_KEY_RIGHT:
+                icon = &menu_icons[ICON_RIGHT];
+                break;
             case MENU_KEY_MOK:
                 icon = &menu_icons[ICON_OK];
                 break;
@@ -666,36 +648,24 @@ static void update_buttons(void)
     int i;
     const touch_zone_t *zones;
     int num_zones;
-    int zone_pressed[NUM_MENU_ZONES] = {0};
 
     current_buttons = 0;
-    visual_menu_buttons = 0;
 
     if (menu_mode) {
-        zones = menu_touch_zones;
-        num_zones = NUM_MENU_ZONES;
-    } else {
-        zones = game_touch_zones;
-        num_zones = NUM_GAME_ZONES;
+        /* Menu mode: buttons handled via tap-to-keystroke in event handler */
+        return;
     }
 
-    /* Calculate current zone states */
+    zones = game_touch_zones;
+    num_zones = NUM_GAME_ZONES;
+
+    /* Calculate current button states for game mode */
     for (i = 0; i < MAX_FINGERS; i++) {
         if (finger_zones[i] >= 0 && finger_zones[i] < num_zones) {
             int zone_idx = finger_zones[i];
             int key = zones[zone_idx].key;
 
-            if (menu_mode) {
-                zone_pressed[zone_idx] = 1;
-
-                /* Track for visual feedback */
-                switch (key) {
-                case MENU_KEY_UP:    visual_menu_buttons |= PBTN_UP;    break;
-                case MENU_KEY_DOWN:  visual_menu_buttons |= PBTN_DOWN;  break;
-                case MENU_KEY_MOK:   visual_menu_buttons |= PBTN_MOK;   break;
-                case MENU_KEY_MBACK: visual_menu_buttons |= PBTN_MBACK; break;
-                }
-            } else if (key >= 0) {
+            if (key >= 0) {
                 current_buttons |= (1 << key);
             } else {
                 /* Handle D-pad diagonals */
@@ -714,25 +684,6 @@ static void update_buttons(void)
                     break;
                 }
             }
-        }
-    }
-
-    /* In menu mode, inject keyboard events on state changes */
-    if (menu_mode) {
-        for (i = 0; i < NUM_MENU_ZONES; i++) {
-            SDLKey sdlkey = menu_key_to_sdlkey(menu_touch_zones[i].key);
-            if (sdlkey == SDLK_UNKNOWN)
-                continue;
-
-            if (zone_pressed[i] && !prev_zone_pressed[i]) {
-                /* New press - inject key down */
-                inject_key_event(sdlkey, 1);
-            } else if (!zone_pressed[i] && prev_zone_pressed[i]) {
-                /* Release - inject key up */
-                inject_key_event(sdlkey, 0);
-            }
-
-            prev_zone_pressed[i] = zone_pressed[i];
         }
     }
 }
@@ -764,10 +715,17 @@ int webos_touch_event(const SDL_Event *event)
                 return 2;
             }
             finger_zones[finger_id] = zone;
+
             if (menu_mode) {
-                last_touch_time = SDL_GetTicks();
+                /* Menu mode: inject a complete keystroke immediately on tap */
+                SDLKey sdlkey = menu_key_to_sdlkey(zones[zone].key);
+                if (sdlkey != SDLK_UNKNOWN) {
+                    inject_key_event(sdlkey, 1);  /* KEY_DOWN */
+                    inject_key_event(sdlkey, 0);  /* KEY_UP */
+                }
+            } else {
+                update_buttons();
             }
-            update_buttons();
         }
         return 1;
 
@@ -777,16 +735,15 @@ int webos_touch_event(const SDL_Event *event)
             finger_id = 0;
 
         if (menu_mode) {
-            /* Menu mode: aggressive clearing for reliability */
+            /* Menu mode: just clear visual state, keystroke already sent on tap */
             for (i = 0; i < MAX_FINGERS; i++) {
                 finger_zones[i] = -1;
             }
         } else {
             /* Game mode: simple finger tracking (original behavior) */
             finger_zones[finger_id] = -1;
+            update_buttons();
         }
-
-        update_buttons();
         return 1;
 
     case SDL_MOUSEMOTION:
@@ -828,22 +785,16 @@ int webos_touch_init(void)
     int i;
     SDL_Event event;
 
-    printf("WebOS Touch [KeyInject]: Initializing on-screen controls\n");
-    printf("WebOS Touch [KeyInject]: Injecting SDL keyboard events for menu\n");
+    printf("WebOS Touch [TapKey]: Initializing on-screen controls\n");
+    printf("WebOS Touch [TapKey]: Menu uses tap-to-keystroke\n");
 
     for (i = 0; i < MAX_FINGERS; i++) {
         finger_zones[i] = -1;
     }
 
-    for (i = 0; i < NUM_MENU_ZONES; i++) {
-        prev_zone_pressed[i] = 0;
-    }
-
     current_buttons = 0;
-    visual_menu_buttons = 0;
     overlay_visible = 1;
     menu_mode = 0;
-    last_touch_time = SDL_GetTicks();
 
     /* Flush any stale mouse/touch events from SDL queue */
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
@@ -853,18 +804,13 @@ int webos_touch_init(void)
         /* discard */
     }
 
-    /* Inject KEY_UP for all menu keys to ensure clean state */
-    inject_key_event(SDLK_UP, 0);
-    inject_key_event(SDLK_DOWN, 0);
-    inject_key_event(SDLK_RETURN, 0);
-    inject_key_event(SDLK_ESCAPE, 0);
-
     initialized = 1;
 
     /* Load menu button icons */
     load_icons();
 
-    printf("WebOS Touch [KeyInject]: %d touch zones defined\n", (int)NUM_TOUCH_ZONES);
+    printf("WebOS Touch [TapKey]: %d game zones, %d menu zones\n",
+           (int)NUM_GAME_ZONES, (int)NUM_MENU_ZONES);
     return 0;
 }
 
@@ -884,13 +830,8 @@ void webos_touch_set_menu_mode(int in_menu)
         for (i = 0; i < MAX_FINGERS; i++) {
             finger_zones[i] = -1;
         }
-        for (i = 0; i < NUM_MENU_ZONES; i++) {
-            prev_zone_pressed[i] = 0;
-        }
         current_buttons = 0;
-        visual_menu_buttons = 0;
         resolution_stable_frames = RESOLUTION_STABLE_THRESHOLD;
-        last_touch_time = SDL_GetTicks();
 
         /* Flush any stale touch events when switching modes */
         while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
@@ -900,22 +841,14 @@ void webos_touch_set_menu_mode(int in_menu)
             /* discard */
         }
 
-        /* When entering menu mode, ensure all menu keys are released */
-        if (in_menu) {
-            inject_key_event(SDLK_UP, 0);
-            inject_key_event(SDLK_DOWN, 0);
-            inject_key_event(SDLK_RETURN, 0);
-            inject_key_event(SDLK_ESCAPE, 0);
-        }
-
-        printf("WebOS Touch [KeyInject]: Switched to %s mode\n", menu_mode ? "menu" : "game");
+        printf("WebOS Touch [TapKey]: Switched to %s mode\n", menu_mode ? "menu" : "game");
     }
 }
 
 int webos_touch_get_menu_buttons(void)
 {
-    /* KeyInject approach: return nothing here since we inject keyboard events
-     * The keyboard driver will handle the actual input */
+    /* TapKey approach: return nothing here since we inject keyboard events
+     * directly on touch. The keyboard driver handles the actual input. */
     return 0;
 }
 
