@@ -221,7 +221,7 @@ The emulator supports save/load states via `freeze/unfreeze` functions in each c
 ### Architecture
 Touch controls are implemented in `frontend/in_webos_touch.c` with two modes:
 - **Game mode**: Full PlayStation controller layout (D-pad, face buttons, shoulders, start/select, menu)
-- **Menu mode**: Simplified navigation (UP, DOWN, BACK, OK at bottom of screen)
+- **Menu mode**: 6-button navigation (UP, DOWN, LEFT, RIGHT as D-pad on left; OK, BACK on right)
 
 ### Multitouch Support
 WebOS SDL 1.2 has Palm-specific multitouch extensions:
@@ -273,11 +273,14 @@ Special key values (-20 to -23) are mapped to combined button presses in `update
 Menu and game buttons use PNG icons with alpha transparency:
 ```
 webos/
-├── menu-up.png, menu-down.png, menu-forward.png, menu-backward.png  # Menu navigation
-├── control-triangle.png, control-circle.png, control-cross.png, control-square.png  # Game buttons
+├── menu-up.png, menu-down.png        # Menu UP/DOWN navigation
+├── menu-forward.png, menu-backward.png  # Menu LEFT/RIGHT navigation
+├── control-circle.png                # Menu OK button (PlayStation O)
+├── control-cross.png                 # Menu BACK button (PlayStation X)
+├── control-triangle.png, control-square.png  # Game action buttons
 ```
 
-Icons are loaded at init via `load_png_rgba()` using libpng, stored as RGBA pixel data, and blitted with alpha blending to RGB565 surface. The `blit_icon()` function handles scaling and per-pixel alpha blending.
+Icons are loaded at init via `load_icon_png()` using libpng, stored as RGBA pixel data, and blitted with alpha blending to RGB565 surface. The `blit_icon()` function handles scaling and per-pixel alpha blending.
 
 ### Control Opacity
 In-game controls use 60% opacity for both borders and pressed highlights:
@@ -319,11 +322,12 @@ The menu system in libpicofe uses `in_menu_wait()` which polls for input with ti
 | One-shot | Set pending buttons on press, clear after read | Unreliable - timing issues |
 | MinHold | Hold buttons active for 150ms after release | Works but feels sluggish |
 | Debounce | 250ms cooldown between presses | Prevents rapid navigation |
-| Queue | Buffer events, return one at a time | Good - second best option |
-| **KeyInject** | Inject SDL keyboard events (SDLK_UP, etc.) | **Best - recommended** |
+| Queue | Buffer events, return one at a time | Good but complex |
+| KeyInject | Inject KEY_DOWN on press, KEY_UP on release | Timing issues, stuck keys |
+| **TapKey** | Inject complete keystroke on tap | **Best - recommended** |
 
-**Recommended Solution (KeyInject)**:
-Instead of tracking touch state and returning it via `webos_touch_get_menu_buttons()`, inject synthetic SDL keyboard events when touch buttons are pressed/released:
+**Recommended Solution (TapKey)**:
+Each tap immediately injects a complete keystroke (KEY_DOWN + KEY_UP). No state tracking needed - one tap = one menu action.
 
 ```c
 static void inject_key_event(SDLKey key, int pressed)
@@ -336,26 +340,34 @@ static void inject_key_event(SDLKey key, int pressed)
     SDL_PushEvent(&event);
 }
 
-// On touch down: inject_key_event(SDLK_UP, 1);
-// On touch up:   inject_key_event(SDLK_UP, 0);
+// In webos_touch_event(), on SDL_MOUSEBUTTONDOWN in menu mode:
+if (menu_mode && zone >= 0) {
+    SDLKey sdlkey = menu_key_to_sdlkey(zones[zone].key);
+    if (sdlkey != SDLK_UNKNOWN) {
+        inject_key_event(sdlkey, 1);  /* KEY_DOWN */
+        inject_key_event(sdlkey, 0);  /* KEY_UP */
+    }
+}
 ```
 
-This integrates with the existing SDL keyboard input path in libpicofe, which already handles timing, repeat, and state tracking correctly.
+This approach is simpler and more reliable than tracking press/release separately:
+- No state synchronization issues
+- No stuck keys possible
+- No timing-dependent behavior
+- Each tap produces exactly one menu action
 
-**Critical: Preventing Stuck Menu Buttons**
-Menu buttons can get "stuck" if KEY_DOWN events are injected but KEY_UP events are lost (e.g., when transitioning between game and menu modes). The fix is to inject KEY_UP for all menu keys when:
-1. Entering menu mode (`webos_touch_set_menu_mode(1)`)
-2. At initialization (`webos_touch_init()`)
-
+**Menu Key Mapping**:
 ```c
-/* Inject KEY_UP for all menu keys to ensure clean state */
-inject_key_event(SDLK_UP, 0);
-inject_key_event(SDLK_DOWN, 0);
-inject_key_event(SDLK_RETURN, 0);
-inject_key_event(SDLK_ESCAPE, 0);
+MENU_KEY_UP    -> SDLK_UP     -> PBTN_UP
+MENU_KEY_DOWN  -> SDLK_DOWN   -> PBTN_DOWN
+MENU_KEY_LEFT  -> SDLK_LEFT   -> PBTN_LEFT
+MENU_KEY_RIGHT -> SDLK_RIGHT  -> PBTN_RIGHT
+MENU_KEY_MOK   -> SDLK_RETURN -> PBTN_MOK
+MENU_KEY_MBACK -> SDLK_ESCAPE -> PBTN_MBACK
 ```
 
-Also flush stale touch events from SDL queue when switching modes:
+**Mode Switching**:
+When switching between game and menu modes, flush stale touch events:
 ```c
 while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
        SDL_EVENTMASK(SDL_MOUSEBUTTONDOWN) |
@@ -364,9 +376,6 @@ while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
     /* discard */
 }
 ```
-
-**Fallback (Queue)**:
-If keyboard injection doesn't work on a platform, the Queue approach is the second-best option. It buffers button press events and returns them one at a time, preventing lost inputs.
 
 ## Development Notes
 
@@ -387,4 +396,7 @@ tail -f /var/log/messages | grep -i pcsx
 ```
 
 ### Test Variants
-The `menu_test_variants/` directory contains alternative implementations of `in_webos_touch.c` for testing different menu button approaches (MinHold, Debounce, Queue, SyncPoll, KeyInject). Use `build_menu_variants.sh` to build all variants with unique app IDs for side-by-side comparison.
+The `menu_test_variants/` directory contains alternative implementations of `in_webos_touch.c` for testing different menu button approaches (MinHold, Debounce, Queue, SyncPoll, KeyInject). Use `build_menu_variants.sh` to build all variants with unique app IDs for side-by-side comparison. Note: The current implementation uses TapKey which supersedes all these approaches.
+
+### Default Browse Directory
+The file browser defaults to `/media/internal/.pcsx` with fallbacks to `/media/internal` then `/media`. This is configured in `frontend/menu.c` in the `menu_do_last_cd_img()` function.
